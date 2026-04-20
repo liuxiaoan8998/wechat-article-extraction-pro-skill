@@ -51,6 +51,14 @@ description: >
 │  5. 同步更新 ~/.hermes/output/ 目录                      │
 └─────────────────────────────────────────────────────────┘
     ↓
+┌─────────────────────────────────────────────────────────┐
+│  阶段 3：飞书 Base 同步（内容管理）                        │
+│  ─────────────────────────────                          │
+│  1. 提取关键信息（标题、公众号、发布时间等）                │
+│  2. 调用 Lark CLI 录入多维表格                            │
+│  3. 更新状态为"待处理"                                   │
+└─────────────────────────────────────────────────────────┘
+    ↓
 完成
 ```
 
@@ -100,6 +108,30 @@ patch: path/to/article-ocr.md
 
 # 同步到 ~/.hermes/output/
 cp -r /tmp/test_output/文章标题 ~/.hermes/output/
+
+# 同步到飞书 Base（内容管理）
+export PATH="$HOME/.npm-global/lib/node_modules/@larksuite/cli/bin:$PATH"
+lark-cli base +record-upsert \
+  --base-token "E9y1bxjHGa9LeGs9q3Tc3J41nmf" \
+  --table-id "tblYIqHtHrWUlVnP" \
+  --json '{
+    "文章标题": "文章标题",
+    "公众号": "公众号名称",
+    "发布时间": "2026-04-20",
+    "文章内容概要总结": "AI生成的结构化总结...",
+    "投递方式": "投递渠道...",
+    "更新时间": "2026-04-20",
+    "文章链接": "https://mp.weixin.qq.com/s/xxx",
+    "行业/领域": {"text": "互联网/科技"},
+    "岗位类型": {"text": "实习"},
+    "工作地点": {"text": "北京"},
+    "学历要求": {"text": "本科"},
+    "优先级": {"text": "中"},
+    "状态": {"text": "待处理"},
+    "标签": [{"text": "大厂"}],
+    "备注": ""
+  }' \
+  --as bot
 ```
 
 ## 输出结构
@@ -669,6 +701,88 @@ lark-cli base +record-upsert \
     \"公众号\": \"$AUTHOR\",
     \"文章内容概要总结\": \"$SUMMARY\",
     \"文章链接\": \"$URL\"
+  }" \
+  --as bot
+```
+
+---
+
+## 飞书 Base 内容管理
+
+### 表格配置
+
+| 属性 | 值 |
+|------|-----|
+| **Base 名称** | 公众号文章选题库 |
+| **Base 链接** | https://rqtvt0xmrql.feishu.cn/base/E9y1bxjHGa9LeGs9q3Tc3J41nmf |
+| **Base Token** | `E9y1bxjHGa9LeGs9q3Tc3J41nmf` |
+| **Table ID** | `tblYIqHtHrWUlVnP` |
+
+### 字段说明
+
+| 字段 | 类型 | 用途 |
+|------|------|------|
+| 文章标题 | 文本 | 主标题 |
+| 公众号 | 文本 | 来源账号 |
+| 发布时间 | 日期 | 原文发布时间 |
+| 文章内容概要总结 | 文本 | AI生成的结构化总结 |
+| 投递方式 | 文本 | 简历投递渠道 |
+| 更新时间 | 日期 | 数据录入时间 |
+| 文章链接 | 文本 | 原文URL |
+| 行业/领域 | 单选 | 互联网/金融/能源/传媒等 |
+| 岗位类型 | 单选 | 实习/校招/社招/兼职 |
+| 工作地点 | 单选 | 城市列表 |
+| 学历要求 | 单选 | 本科/硕士/博士/不限 |
+| 截止日期 | 日期 | 招聘截止 |
+| 优先级 | 单选 | 高/中/低 |
+| 状态 | 单选 | 待处理/已选题/撰写中/已二创/已发布 |
+| 标签 | 多选 | 热门/急招/大厂/国企/外企/可内推 |
+| 备注 | 文本 | 编辑备注 |
+
+### 二创工作流
+
+```
+待处理 → 已选题 → 撰写中 → 已二创 → 已发布
+```
+
+**筛选视图建议：**
+- 按「状态」筛选：查看待处理文章
+- 按「优先级」筛选：优先处理高优先级
+- 按「行业/领域」筛选：分类整理
+- 按「岗位类型」筛选：实习/校招/社招
+
+### 自动录入脚本
+
+```bash
+#!/bin/bash
+# 将提取的文章同步到飞书 Base
+
+BASE_TOKEN="E9y1bxjHGa9LeGs9q3Tc3J41nmf"
+TABLE_ID="tblYIqHtHrWUlVnP"
+ARTICLE_DIR="$1"
+
+# 读取 metadata
+TITLE=$(cat "$ARTICLE_DIR/metadata.json" | jq -r '.title')
+AUTHOR=$(cat "$ARTICLE_DIR/metadata.json" | jq -r '.author')
+URL=$(cat "$ARTICLE_DIR/metadata.json" | jq -r '.url')
+PUBLISHED=$(cat "$ARTICLE_DIR/metadata.json" | jq -r '.published_at')
+
+# 读取总结内容（前500字）
+SUMMARY=$(grep -A 50 "### 招聘概览\|### 公司介绍\|### 招募概览" "$ARTICLE_DIR/article-ocr.md" | head -c 500)
+
+# 录入 Base
+export PATH="$HOME/.npm-global/lib/node_modules/@larksuite/cli/bin:$PATH"
+lark-cli base +record-upsert \
+  --base-token "$BASE_TOKEN" \
+  --table-id "$TABLE_ID" \
+  --json "{
+    \"文章标题\": \"$TITLE\",
+    \"公众号\": \"$AUTHOR\",
+    \"发布时间\": \"$PUBLISHED\",
+    \"文章内容概要总结\": \"$SUMMARY\",
+    \"文章链接\": \"$URL\",
+    \"更新时间\": \"$(date +%Y-%m-%d)\",
+    \"状态\": {\"text\": \"待处理\"}
   }" \
   --as bot
 ```
