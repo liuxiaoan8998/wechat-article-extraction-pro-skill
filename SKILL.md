@@ -2,8 +2,8 @@
 name: wechat-article-extraction-pro
 description: >
   微信公众号文章提取 Pro 版完整执行流程。
-  基于 wechat-article-for-ai 增强，实现5文件输出 + RapidOCR 识别 + Hermes 总结回填。
-  Hybrid 模式：工具负责提取+OCR，Hermes 负责总结。
+  基于 wechat-article-for-ai 增强，实现5文件输出 + RapidOCR 识别 + Hermes 总结回填 + 飞书 Base 同步。
+  Hybrid 模式：工具负责提取+OCR，Hermes 负责总结，支持内容管理和二创工作流。
 ---
 
 # 微信公众号文章提取 Pro 版 - 执行流程
@@ -523,3 +523,168 @@ cd /tmp/wechat-article-for-ai-pro && git status
 # 查看技能列表
 hermes skills list web
 ```
+
+---
+
+## v2.1 新增：飞书多维表格集成（内容管理）
+
+### 功能概述
+将提取的公众号文章自动同步到飞书多维表格，支持选题管理和二创工作流。
+
+### 完整流程图（v2.1）
+
+```
+用户提供 URL
+    ↓
+┌─────────────────────────────────────────────────────────┐
+│  阶段 1：工具提取（本地执行）                              │
+│  1. 启动 Camoufox 浏览器访问文章                          │
+│  2. 提取标题、作者、正文内容                               │
+│  3. OCR 识别（RapidOCR）                                  │
+│  4. 生成 5 文件输出                                        │
+└─────────────────────────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────────────────────────┐
+│  阶段 2：Hermes 总结（AI 处理）                           │
+│  1. 读取 article-ocr.md 的 OCR 内容                      │
+│  2. 结构化分析并生成总结                                   │
+│  3. 回填到 article-ocr.md 第三部分                        │
+└─────────────────────────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────────────────────────┐
+│  阶段 3：飞书 Base 同步（内容管理）                        │
+│  1. 提取关键字段（标题、公众号、投递方式等）                │
+│  2. 调用 Lark CLI 录入多维表格                             │
+│  3. 标记状态为"待处理"                                     │
+└─────────────────────────────────────────────────────────┘
+    ↓
+完成（可在飞书表格中进行选题和二创管理）
+```
+
+### 前置条件
+
+1. **安装 Lark CLI**
+```bash
+npm install -g @larksuite/cli
+export PATH="$HOME/.npm-global/lib/node_modules/@larksuite/cli/bin:$PATH"
+```
+
+2. **配置 Lark CLI 认证**
+```bash
+lark-cli config init --app-id "cli_xxx" --app-secret-stdin
+lark-cli doctor  # 验证配置
+```
+
+3. **创建 Base（首次使用）**
+```bash
+# 创建 Base
+lark-cli base +base-create --name "公众号文章选题库" --as bot
+
+# 创建表格
+lark-cli base +table-create --base-token "YOUR_BASE_TOKEN" --name "文章列表" --as bot
+
+# 添加字段（参考下方字段结构）
+```
+
+### Base 字段结构
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| 文章标题 | 文本 | 主标题 |
+| 公众号 | 文本 | 来源账号 |
+| 发布时间 | 日期 | 原文发布时间 |
+| 文章内容概要总结 | 文本 | AI生成的结构化总结 |
+| 投递方式 | 文本 | 简历投递渠道 |
+| 更新时间 | 日期 | 数据录入时间 |
+| 文章链接 | 文本 | 原文URL |
+| 行业/领域 | 单选 | 互联网/金融/能源/传媒等 |
+| 岗位类型 | 单选 | 实习/校招/社招/兼职 |
+| 工作地点 | 单选 | 城市列表 |
+| 学历要求 | 单选 | 本科/硕士/博士/不限 |
+| 截止日期 | 日期 | 招聘截止 |
+| 优先级 | 单选 | 高/中/低 |
+| 状态 | 单选 | 待处理/已选题/撰写中/已二创/已发布 |
+| 标签 | 单选 | 热门/急招/大厂/国企/外企/可内推 |
+| 备注 | 文本 | 编辑备注 |
+
+### 录入命令示例
+
+```bash
+export PATH="$HOME/.npm-global/lib/node_modules/@larksuite/cli/bin:$PATH"
+
+lark-cli base +record-upsert \
+  --base-token "E9y1bxjHGa9LeGs9q3Tc3J41nmf" \
+  --table-id "tblYIqHtHrWUlVnP" \
+  --json '{
+    "文章标题": "文章标题",
+    "公众号": "公众号名称",
+    "文章内容概要总结": "AI生成的总结",
+    "投递方式": "投递方式详情",
+    "文章链接": "https://mp.weixin.qq.com/s/xxx"
+  }' \
+  --as bot
+```
+
+### 工作流建议
+
+**二创管理流程：**
+1. **待处理** → 新提取的文章默认状态
+2. **已选题** → 编辑确认要二创的文章
+3. **撰写中** → 正在撰写二创内容
+4. **已二创** → 二创完成，待发布
+5. **已发布** → 已发布到目标平台
+
+**筛选视图：**
+- 按行业筛选（金融/能源/传媒）
+- 按岗位类型筛选（实习/校招/社招）
+- 按状态筛选（待处理/已选题/已发布）
+- 按优先级筛选（高/中/低）
+
+### 自动化脚本（可选）
+
+创建 `scripts/sync_to_feishu.sh`：
+
+```bash
+#!/bin/bash
+# 将提取的文章同步到飞书 Base
+
+BASE_TOKEN="YOUR_BASE_TOKEN"
+TABLE_ID="YOUR_TABLE_ID"
+ARTICLE_DIR="$1"
+
+# 读取 metadata
+TITLE=$(cat "$ARTICLE_DIR/metadata.json" | jq -r '.title')
+AUTHOR=$(cat "$ARTICLE_DIR/metadata.json" | jq -r '.author')
+URL=$(cat "$ARTICLE_DIR/metadata.json" | jq -r '.url')
+
+# 读取总结内容（前500字）
+SUMMARY=$(head -c 500 "$ARTICLE_DIR/article-ocr.md")
+
+# 录入 Base
+lark-cli base +record-upsert \
+  --base-token "$BASE_TOKEN" \
+  --table-id "$TABLE_ID" \
+  --json "{
+    \"文章标题\": \"$TITLE\",
+    \"公众号\": \"$AUTHOR\",
+    \"文章内容概要总结\": \"$SUMMARY\",
+    \"文章链接\": \"$URL\"
+  }" \
+  --as bot
+```
+
+---
+
+## 版本历史
+
+| 版本 | 变更 |
+|------|------|
+| v1.0 | 标准4文件输出 |
+| v1.2 | 添加 article-ocr.md 占位符 |
+| v1.3 | AI Vision OCR 集成 |
+| v1.4 | 集成 RapidOCR 本地识别 |
+| v1.5 | 可配置 OCR 引擎 |
+| v1.5.1 | 修复 RGBA 图片切片保存问题 |
+| v1.6 | Hybrid 模式：工具提取+OCR，Hermes 总结回填 |
+| v2.0 | 标准 Skill 结构，Git 版本控制 |
+| v2.1 | **新增飞书 Base 集成**，支持内容管理和二创工作流 |
