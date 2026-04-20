@@ -453,3 +453,73 @@ with open(f"{output_dir}/.hermes_summary_pending", "w") as f:
 ---
 *由 Hermes Agent 基于 OCR 结果自动总结生成*
 ```
+
+---
+
+## 故障排除与维护
+
+### Skill 丢失/损坏恢复
+
+如果 Skill 目录被误删或损坏：
+
+```bash
+# 1. 从 GitHub 恢复 Skill
+cd ~/.hermes/skills/web
+git clone https://github.com/liuxiaoan8998/wechat-article-extraction-pro-skill.git wechat-article-extraction-pro
+
+# 2. 重新部署 Python 项目
+cd /tmp
+rm -rf wechat-article-for-ai-pro
+git clone https://github.com/liuxiaoan8998/wechat-article-for-ai-pro.git
+
+# 3. 运行安装脚本
+bash ~/.hermes/skills/web/wechat-article-extraction-pro/scripts/setup.sh
+```
+
+### 双仓库管理策略
+
+| 仓库 | 地址 | 用途 | 更新时机 |
+|------|------|------|----------|
+| Python 源码 | `wechat-article-for-ai-pro` | 核心提取工具 | 功能迭代 |
+| Hermes Skill | `wechat-article-extraction-pro-skill` | 调用指南和脚本 | 流程优化 |
+
+**为什么分离？**
+- Python 项目：关注功能实现（OCR、下载、解析）
+- Skill 项目：关注调用流程（参数、步骤、示例）
+- 不同迭代周期，避免互相干扰
+
+### 版本控制工作流
+
+**Skill 更新：**
+```bash
+cd ~/.hermes/skills/web/wechat-article-extraction-pro
+git add .
+git commit -m "v2.0.x: 描述"
+git push origin main
+```
+
+**Python 源码更新：**
+```bash
+cd /tmp/wechat-article-for-ai-pro
+git pull origin main  # 先同步远程
+git add .
+git commit -m "v1.x: 描述"
+git push origin main
+```
+
+### 快速诊断命令
+
+```bash
+# 检查 Skill 是否存在
+ls ~/.hermes/skills/web/wechat-article-extraction-pro/
+
+# 检查 Python 项目是否存在
+ls /tmp/wechat-article-for-ai-pro/
+
+# 检查 Git 状态
+cd ~/.hermes/skills/web/wechat-article-extraction-pro && git status
+cd /tmp/wechat-article-for-ai-pro && git status
+
+# 查看技能列表
+hermes skills list web
+```
