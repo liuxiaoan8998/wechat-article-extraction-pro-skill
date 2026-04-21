@@ -154,10 +154,37 @@ lark-cli base +record-upsert \
 ~/.hermes/output/文章标题/
 ├── article.md              # 基础文字
 ├── article.html            # 网页格式
-├── article-ocr.md          # OCR + 总结 ✅
+├── article-ocr.md          # OCR + 二维码识别 + 总结 ✅
 ├── metadata.json           # 元数据
 ├── images/                 # 原始图片
 └── slices/                 # 长图切片（如有）
+```
+
+### article-ocr.md 结构（v1.7）
+
+```markdown
+# 文章内容（含图片 OCR 识别）
+
+## 一、原文文字内容
+[原文 Markdown]
+
+## 二、二维码识别内容  ← 新增独立章节
+检测到 **N** 张包含二维码的图片
+
+### img_XXX.jpg
+**图片路径**: `images/img_XXX.jpg`
+
+**二维码 1**:
+- **类型**: 📝 招聘/报名链接 / 🔗 链接 / 📞 联系方式 / 📝 文本内容
+- **内容**: {URL或文本}
+
+---
+
+## 三、图片 OCR 识别内容
+[OCR 结果]
+
+## 四、完整文字内容（原文 + OCR）
+[AI 总结回填]
 ```
 
 ## Hybrid 模式说明
@@ -416,6 +443,18 @@ output/
 - 环境兼容性问题
 - 改用 AI Vision，无需本地安装
 
+### 二维码识别方案（v1.7）
+
+**引擎选择**：使用 OpenCV QRCodeDetector 而非 pyzbar
+- **优势**：无需系统依赖（zbar库），实现零配置部署
+- **识别率**：测试样本 100%（浙江事业单位3/3，中国化学工程2/10）
+- **智能分类**：基于URL关键词匹配（apply/job/career/校招/招聘/报名/投递等）
+
+**数据结构分离**：
+- `process_all_images()` 返回 `(ocr_results, qr_results)` 元组
+- 二维码内容独立成章（第二章节），而非附在每张图片OCR结果后
+- 便于快速定位和批量处理
+
 ### 为什么分离 OCR 和提取？
 - Python 环境无法直接调用 Hermes 工具
 - 分离后流程清晰：提取 → 识别 → 整合
@@ -443,6 +482,7 @@ output/
 | v1.5 | 可配置 OCR 引擎（rapidocr/vision/auto）|
 | v1.5.1 | 修复 RGBA 图片切片保存问题 |
 | v1.6 | **hybrid 模式**：工具提取+OCR，Hermes 负责总结回填 |
+| v1.7 | **新增二维码识别功能**：OpenCV QRCodeDetector 自动检测，智能分类招聘/报名链接 |
 
 ---
 
@@ -1500,3 +1540,4 @@ lark-cli api PUT /open-apis/bitable/v1/apps/E9y1bxjHGa9LeGs9q3Tc3J41nmf/tables/t
 | v2.12 | **添加飞书同步指南文档** references/feishu-sync-guide.md |
 | v2.13 | **添加更新已有记录方法**：update_feishu_record()函数，支持补充缺失字段和修正数据 |
 | v2.14 | **添加完整字段检查流程**：sync_article_to_feishu()函数，包含22个字段的必填检查清单 |
+| v2.15 | **添加二维码识别功能说明**：v1.7 新增 OpenCV QRCodeDetector，智能分类招聘链接 |
