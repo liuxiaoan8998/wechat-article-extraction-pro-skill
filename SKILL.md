@@ -653,22 +653,148 @@ lark-cli base +table-create --base-token "YOUR_BASE_TOKEN" --name "文章列表"
 | 标签 | 单选 | 热门/急招/大厂/国企/外企/可内推 |
 | 备注 | 文本 | 编辑备注 |
 
-### 录入命令示例
+### 标准同步方法（推荐）
+
+使用 Python 脚本标准化同步流程：
+
+```python
+import subprocess
+import json
+import os
+
+def sync_to_feishu(record_data: dict) -> dict:
+    """
+    同步单条记录到飞书Base
+    
+    Args:
+        record_data: 符合Base字段格式的字典
+        
+    Returns:
+        dict: 包含 success, record_id, error 的结果
+    """
+    base_token = "E9y1bxjHGa9LeGs9q3Tc3J41nmf"
+    table_id = "tblYIqHtHrWUlVnP"
+    
+    # 写入临时文件（必须使用相对路径）
+    with open('sync_data.json', 'w', encoding='utf-8') as f:
+        json.dump(record_data, f, ensure_ascii=False)
+    
+    try:
+        # 执行同步命令
+        result = subprocess.run(
+            f'lark-cli base +record-upsert --base-token {base_token} --table-id {table_id} --json @sync_data.json --as bot',
+            shell=True, capture_output=True, text=True
+        )
+        
+        # 解析结果
+        if result.returncode == 0:
+            response = json.loads(result.stdout)
+            if response.get('ok'):
+                record_id = response['data']['record']['record_id_list'][0]
+                return {'success': True, 'record_id': record_id}
+            else:
+                return {'success': False, 'error': response.get('error')}
+        else:
+            return {'success': False, 'error': result.stderr}
+    finally:
+        # 清理临时文件
+        if os.path.exists('sync_data.json'):
+            os.remove('sync_data.json')
+
+# 使用示例
+record = {
+    "文章标题": "文章标题",
+    "行业": "消费品",  # 单选字段直接使用字符串
+    "岗位类型": ["实习"],  # 多选字段使用数组
+    "标签": ["大厂", "国企"],  # 最多3个
+    # ... 其他字段
+}
+
+result = sync_to_feishu(record)
+if result['success']:
+    print(f"同步成功！记录ID: {result['record_id']}")
+else:
+    print(f"同步失败: {result['error']}")
+```
+
+### 批量同步多篇文章
+
+```python
+import subprocess
+import json
+import os
+
+def batch_sync_to_feishu(records: list) -> list:
+    """
+    批量同步多篇文章到飞书Base
+    
+    Args:
+        records: 记录数据列表
+        
+    Returns:
+        list: 每条记录的同步结果
+    """
+    results = []
+    for i, record in enumerate(records):
+        print(f"正在同步第 {i+1}/{len(records)} 篇文章...")
+        result = sync_to_feishu(record)
+        results.append(result)
+        
+        if result['success']:
+            print(f"  ✅ 成功: {result['record_id']}")
+        else:
+            print(f"  ❌ 失败: {result['error']}")
+    
+    return results
+
+# 使用示例
+articles = [
+    {"文章标题": "文章1", "行业": "互联网", "岗位类型": ["实习"]},
+    {"文章标题": "文章2", "行业": "金融", "岗位类型": ["校招"]},
+    {"文章标题": "文章3", "行业": "能源", "岗位类型": ["实习"]},
+]
+
+results = batch_sync_to_feishu(articles)
+success_count = sum(1 for r in results if r['success'])
+print(f"\n同步完成: {success_count}/{len(articles)} 篇成功")
+```
+
+### 命令行直接录入（备用）
 
 ```bash
 export PATH="$HOME/.npm-global/lib/node_modules/@larksuite/cli/bin:$PATH"
 
+# 先创建数据文件
+cat > data.json << 'EOF'
+{
+  "文章标题": "文章标题",
+  "行业": "消费品",
+  "岗位类型": ["实习"],
+  "工作地点": "/",
+  "学历要求": "本科",
+  "截止日期": "/",
+  "投递方式": "扫码投递",
+  "原文亮点": "亮点内容",
+  "文章概要": "概要内容",
+  "选题方向": "消费品行业实习机会",
+  "素材状态": "待选题",
+  "文章来源": "链接",
+  "适配账号": ["Joblinker"],
+  "优先级": "中",
+  "标签": ["大厂"],
+  "采集时间": 1752571200000
+}
+EOF
+
+# 执行同步
 lark-cli base +record-upsert \
   --base-token "E9y1bxjHGa9LeGs9q3Tc3J41nmf" \
   --table-id "tblYIqHtHrWUlVnP" \
-  --json '{
-    "文章标题": "文章标题",
-    "公众号": "公众号名称",
-    "文章内容概要总结": "AI生成的总结",
-    "投递方式": "投递方式详情",
-    "文章链接": "https://mp.weixin.qq.com/s/xxx"
-  }' \
+  --json @data.json \
   --as bot
+
+# 清理临时文件
+rm data.json
 ```
 
 ### 工作流建议
