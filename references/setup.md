@@ -32,6 +32,32 @@ pip install -r requirements.txt
 - rapidocr-onnxruntime (OCR识别)
 - pillow (图片处理)
 - requests (HTTP请求)
+- opencv-python (二维码识别，v1.7+)
+
+## 二维码识别功能 (v1.7+)
+
+工具现已支持自动识别图片中的二维码内容，包括：
+- 招聘/报名链接（自动标记）
+- 普通URL链接
+- 联系方式（电话、邮箱）
+- 纯文本内容
+
+### 技术实现
+- **引擎**: OpenCV QRCodeDetector（无需系统依赖）
+- **备选**: pyzbar（如系统已安装zbar库）
+- **智能分类**: 自动识别招聘相关链接并标记
+
+### 输出示例
+```markdown
+#### 图片: img_002.png
+
+**状态**: [普通图片 400x400]
+
+[No text detected]
+
+**二维码识别**:
+🔗 **链接**: https://rlsbt.zj.gov.cn/...
+```
 
 ## 使用方式
 
@@ -64,8 +90,14 @@ python main.py "https://mp.weixin.qq.com/s/xxxxx"
 - 重新运行setup.sh脚本
 - 或从GitHub重新克隆
 
+### 问题4: 二维码识别失败
+- 检查opencv是否安装: `pip show opencv-python`
+- 二维码识别依赖OpenCV，无需额外系统依赖
+- 识别结果会显示在article-ocr.md的"二维码识别"部分
+
 ## 版本历史
 - v1.0: 基础提取功能
 - v1.5: 添加RapidOCR支持
 - v1.5.1: 修复RGBA图片处理问题
+- v1.7: **新增二维码识别功能** - 自动检测图片中的二维码并提取内容
 - v2.0: Hybrid模式（工具+AI协作）
