@@ -653,7 +653,154 @@ lark-cli base +table-create --base-token "YOUR_BASE_TOKEN" --name "文章列表"
 | 标签 | 单选 | 热门/急招/大厂/国企/外企/可内推 |
 | 备注 | 文本 | 编辑备注 |
 
-### 标准同步方法（推荐）
+### 标准同步流程（含字段检查）
+
+```python
+import subprocess
+import json
+import os
+from datetime import datetime
+
+def sync_article_to_feishu(article_dir: str) -> dict:
+    """
+    完整的文章同步流程，包含字段检查和自动补充
+    
+    Args:
+        article_dir: 文章输出目录路径（如 ~/.hermes/output/文章标题/）
+        
+    Returns:
+        dict: 包含 success, record_id, missing_fields 的结果
+    """
+    # 1. 读取metadata.json
+    metadata_path = os.path.join(article_dir, 'metadata.json')
+    with open(metadata_path, 'r', encoding='utf-8') as f:
+        metadata = json.load(f)
+    
+    # 2. 读取article-ocr.md获取OCR内容
+    ocr_path = os.path.join(article_dir, 'article-ocr.md')
+    with open(ocr_path, 'r', encoding='utf-8') as f:
+        ocr_content = f.read()
+    
+    # 3. 准备基础数据（从metadata提取）
+    base_token = "E9y1bxjHGa9LeGs9q3Tc3J41nmf"
+    table_id = "tblYIqHtHrWUlVnP"
+    
+    # 格式化发布时间
+    published_at = metadata.get('published_at', '')
+    if published_at:
+        # 尝试解析并格式化为 YYYY/MM/DD
+        try:
+            dt = datetime.strptime(published_at, "%Y-%m-%d %H:%M:%S")
+            formatted_date = dt.strftime("%Y/%m/%d")
+        except:
+            formatted_date = published_at
+    else:
+        formatted_date = "/"
+    
+    # 4. 构建完整记录数据
+    record_data = {
+        # ❗ 必填字段（从metadata提取）
+        "文章标题": metadata.get('title', ''),
+        "公众号": metadata.get('author', ''),
+        "发布时间": formatted_date,
+        "文章链接": metadata.get('url', ''),
+        
+        # AI分析字段（从OCR内容提取）
+        "行业": analyze_industry(ocr_content),  # 需要实现
+        "领域": analyze_field(ocr_content),
+        "岗位类型": analyze_job_types(ocr_content),
+        "工作地点": analyze_location(ocr_content),
+        "学历要求": analyze_education(ocr_content),
+        "截止日期": analyze_deadline(ocr_content),
+        "投递方式": analyze_apply_method(ocr_content),
+        "原文亮点": analyze_highlights(ocr_content),
+        "文章概要": generate_summary(ocr_content),
+        "选题方向": determine_topic_direction(ocr_content),
+        
+        # 固定值字段
+        "素材状态": "待选题",
+        "文章来源": "链接",
+        "适配账号": match_accounts(ocr_content),
+        "优先级": "中",
+        "标签": analyze_tags(ocr_content),
+        "采集时间": int(datetime.now().timestamp() * 1000),
+    }
+    
+    # 5. 检查必填字段
+    required_fields = ['文章标题', '公众号', '发布时间', '文章链接']
+    missing_fields = [f for f in required_fields if not record_data.get(f) or record_data.get(f) == '/']
+    
+    if missing_fields:
+        print(f"⚠️ 警告：以下必填字段缺失或为空: {', '.join(missing_fields)}")
+    
+    # 6. 写入临时文件并同步
+    with open('sync_data.json', 'w', encoding='utf-8') as f:
+        json.dump(record_data, f, ensure_ascii=False)
+    
+    try:
+        cmd = (
+            f'lark-cli base +record-upsert '
+            f'--base-token {base_token} '
+            f'--table-id {table_id} '
+            f'--json @sync_data.json '
+            f'--as bot'
+        )
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            response = json.loads(result.stdout)
+            if response.get('ok'):
+                record_id = response['data']['record']['record_id_list'][0]
+                print(f"✅ 同步成功！记录ID: {record_id}")
+                if missing_fields:
+                    print(f"⚠️ 但以下字段缺失，建议后续补充: {', '.join(missing_fields)}")
+                return {
+                    'success': True,
+                    'record_id': record_id,
+                    'missing_fields': missing_fields
+                }
+            else:
+                return {
+                    'success': False,
+                    'error': response.get('error'),
+                    'missing_fields': missing_fields
+                }
+        else:
+            return {
+                'success': False,
+                'error': result.stderr,
+                'missing_fields': missing_fields
+            }
+    finally:
+        if os.path.exists('sync_data.json'):
+            os.remove('sync_data.json')
+
+# 使用示例
+result = sync_article_to_feishu("~/.hermes/output/Peet's第二届暑期实习项目火热招聘中！/")
+if result['success']:
+    print(f"记录ID: {result['record_id']}")
+    if result['missing_fields']:
+        print(f"缺失字段: {result['missing_fields']}")
+        # 可以选择立即补充
+        # update_missing_fields(result['record_id'], metadata)
+```
+
+### 字段检查清单
+
+同步前必须确认以下字段：
+
+| 优先级 | 字段 | 来源 | 检查方法 |
+|--------|------|------|----------|
+| P0 | 文章标题 | metadata.json | `metadata.get('title')` |
+| P0 | 公众号 | metadata.json | `metadata.get('author')` |
+| P0 | 发布时间 | metadata.json | `metadata.get('published_at')` → 格式化为 YYYY/MM/DD |
+| P0 | 文章链接 | metadata.json | `metadata.get('url')` |
+| P1 | 行业 | AI分析 | 根据内容判断 |
+| P1 | 岗位类型 | AI分析 | 实习/校招/社招/兼职 |
+| P1 | 工作地点 | AI提取 | 从OCR内容提取 |
+| P2 | 其他字段 | AI分析 | 截止日期、投递方式等 |
+
+**注意**：P0字段缺失时必须警告，可选择立即补充或后续更新。
 
 使用 Python 脚本标准化同步流程：
 
@@ -1352,3 +1499,4 @@ lark-cli api PUT /open-apis/bitable/v1/apps/E9y1bxjHGa9LeGs9q3Tc3J41nmf/tables/t
 | v2.11 | **添加飞书Base同步标准方法**：sync_to_feishu()函数、批量同步、命令行方案 |
 | v2.12 | **添加飞书同步指南文档** references/feishu-sync-guide.md |
 | v2.13 | **添加更新已有记录方法**：update_feishu_record()函数，支持补充缺失字段和修正数据 |
+| v2.14 | **添加完整字段检查流程**：sync_article_to_feishu()函数，包含22个字段的必填检查清单 |
