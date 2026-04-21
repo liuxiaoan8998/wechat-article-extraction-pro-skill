@@ -706,7 +706,6 @@ record = {
     "文章标题": "文章标题",
     "行业": "消费品",  # 单选字段直接使用字符串
     "岗位类型": ["实习"],  # 多选字段使用数组
-    "标签": ["大厂", "国企"],  # 最多3个
     # ... 其他字段
 }
 
@@ -714,6 +713,80 @@ result = sync_to_feishu(record)
 if result['success']:
     print(f"同步成功！记录ID: {result['record_id']}")
 else:
+    print(f"同步失败: {result['error']}")
+```
+
+### 更新已有记录
+
+当需要补充或修改已同步记录时，使用 `--record-id` 参数：
+
+```python
+import subprocess
+import json
+import os
+
+def update_feishu_record(record_id: str, update_data: dict) -> dict:
+    """
+    更新飞书Base中已有的记录
+    
+    Args:
+        record_id: 记录ID（如 recvhq1MWUhyc5）
+        update_data: 要更新的字段字典
+        
+    Returns:
+        dict: 包含 success, record_id, error 的结果
+    """
+    base_token = "E9y1bxjHGa9LeGs9q3Tc3J41nmf"
+    table_id = "tblYIqHtHrWUlVnP"
+    
+    # 写入临时文件
+    with open('update_data.json', 'w', encoding='utf-8') as f:
+        json.dump(update_data, f, ensure_ascii=False)
+    
+    try:
+        # 执行更新命令（添加 --record-id 参数）
+        cmd = (
+            f'lark-cli base +record-upsert '
+            f'--base-token {base_token} '
+            f'--table-id {table_id} '
+            f'--record-id {record_id} '  # 指定要更新的记录
+            f'--json @update_data.json '
+            f'--as bot'
+        )
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            response = json.loads(result.stdout)
+            if response.get('ok'):
+                return {'success': True, 'record_id': record_id}
+            else:
+                return {'success': False, 'error': response.get('error')}
+        else:
+            return {'success': False, 'error': result.stderr}
+    finally:
+        if os.path.exists('update_data.json'):
+            os.remove('update_data.json')
+
+# 使用示例：补充缺失字段
+record_id = "recvhq1MWUhyc5"  # Peet's的记录ID
+update_data = {
+    "文章标题": "Peet's第二届暑期实习项目火热招聘中！",
+    "公众号": "皮爷招聘",
+    "文章链接": "https://mp.weixin.qq.com/s/xxx"
+}
+
+result = update_feishu_record(record_id, update_data)
+if result['success']:
+    print(f"更新成功！记录ID: {result['record_id']}")
+else:
+    print(f"更新失败: {result['error']}")
+```
+
+**常见更新场景**：
+1. **补充缺失字段**：初次同步时某些字段未填写，后续补充
+2. **修正错误数据**：发现同步的数据有误，需要更正
+3. **更新状态**：如从"待选题"更新为"已选题"
+4. **添加标签**：为文章添加或修改标签
     print(f"同步失败: {result['error']}")
 ```
 
@@ -1276,3 +1349,6 @@ lark-cli api PUT /open-apis/bitable/v1/apps/E9y1bxjHGa9LeGs9q3Tc3J41nmf/tables/t
 | v2.8 | **删除字段**：移除"状态"和"二创深度"字段 |
 | v2.9 | **更新标签字段**：改为多选，最多可选3个 |
 | v2.10 | **更新岗位类型字段**：改为多选（最多2个）；**新增适配账号匹配规则** |
+| v2.11 | **添加飞书Base同步标准方法**：sync_to_feishu()函数、批量同步、命令行方案 |
+| v2.12 | **添加飞书同步指南文档** references/feishu-sync-guide.md |
+| v2.13 | **添加更新已有记录方法**：update_feishu_record()函数，支持补充缺失字段和修正数据 |
