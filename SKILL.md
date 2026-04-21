@@ -455,17 +455,28 @@ output/
 - 环境兼容性问题
 - 改用 AI Vision，无需本地安装
 
-### 二维码识别方案（v1.7）
+### 二维码识别方案（v1.7+）
 
-**引擎选择**：使用 OpenCV QRCodeDetector 而非 pyzbar
-- **优势**：无需系统依赖（zbar库），实现零配置部署
-- **识别率**：测试样本 100%（浙江事业单位3/3，中国化学工程2/10）
-- **智能分类**：基于URL关键词匹配（apply/job/career/校招/招聘/报名/投递等）
+**引擎选择**：
+- **首选**：zbar-py（识别能力最强，支持复杂背景）
+- **备选**：OpenCV QRCodeDetector（无需额外依赖）
+
+**安装 zbar-py**：
+```bash
+pip3 install zbar-py
+```
+
+**智能分类**：基于URL关键词匹配（apply/job/career/校招/招聘/报名/投递等）自动标记招聘链接
 
 **数据结构分离**：
 - `process_all_images()` 返回 `(ocr_results, qr_results)` 元组
 - 二维码内容独立成章（第二章节），而非附在每张图片OCR结果后
 - 便于快速定位和批量处理
+
+**第四章整合**：
+- 标题：`完整文字内容（原文 + OCR + 二维码）`
+- 自动提取关键信息（招聘链接、联系方式等）
+- 检测到招聘链接时显示警告提示，确保 AI 总结时不遗漏
 
 ### 为什么分离 OCR 和提取？
 - Python 环境无法直接调用 Hermes 工具
@@ -496,6 +507,7 @@ output/
 | v1.6 | **hybrid 模式**：工具提取+OCR，Hermes 负责总结回填 |
 | v1.7 | **新增二维码识别功能**：OpenCV QRCodeDetector 自动检测，智能分类招聘/报名链接 |
 | v1.7.1 | **第四章整合二维码信息**：完整文字内容（原文+OCR+二维码），自动提取关键链接供 AI 总结 |
+| v1.7.2 | **集成 zbar-py**：识别能力更强，解决 OpenCV 无法识别的复杂背景二维码问题 |
 
 ---
 
@@ -1554,3 +1566,5 @@ lark-cli api PUT /open-apis/bitable/v1/apps/E9y1bxjHGa9LeGs9q3Tc3J41nmf/tables/t
 | v2.13 | **添加更新已有记录方法**：update_feishu_record()函数，支持补充缺失字段和修正数据 |
 | v2.14 | **添加完整字段检查流程**：sync_article_to_feishu()函数，包含22个字段的必填检查清单 |
 | v2.15 | **添加二维码识别功能说明**：v1.7 新增 OpenCV QRCodeDetector，智能分类招聘链接 |
+| v2.16 | **更新第四章结构说明**：展示第四章新格式（原文+OCR+二维码） |
+| v2.17 | **集成 zbar-py 说明**：v1.7.2 新增 zbar-py 支持，解决复杂背景二维码识别问题 |
