@@ -296,7 +296,8 @@ def sync_to_feishu(metadata: dict, ai_analysis: dict) -> dict:
         "公众号": metadata.get('author', ''),
         "发布时间": metadata.get('published_at', '')[:10] if metadata.get('published_at') else '/',
         "文章链接": metadata.get('url', ''),
-        "素材状态": "待选题",
+        "文章ID": metadata.get('article_id', ''),  # 新增：文章唯一ID
+        "文章状态": "待选题",
         "文章来源": "链接",
         "采集时间": int(datetime.now().timestamp() * 1000),
         
@@ -306,11 +307,11 @@ def sync_to_feishu(metadata: dict, ai_analysis: dict) -> dict:
     
     # 字段完整性校验
     required_fields = [
-        '文章标题', '公众号', '发布时间', '文章链接',
+        '文章标题', '公众号', '发布时间', '文章链接', '文章ID',
         '行业', '领域', '岗位类型', '工作地点', 
         '学历要求', '截止日期', '投递方式',
         '原文亮点', '文章概要', '选题方向',
-        '素材状态', '文章来源', '适配账号',
+        '文章状态', '文章来源', '适配账号',
         '优先级', '标签', '采集时间'
     ]
     

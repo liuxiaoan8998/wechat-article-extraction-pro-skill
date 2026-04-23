@@ -2,7 +2,7 @@
 name: wechat-article-extraction-pro
 description: >
   微信公众号文章提取 Pro 版完整执行流程。
-  基于 wechat-article-for-ai 增强，实现5文件输出 + RapidOCR 识别 + Hermes 总结回填 + 飞书 Base 同步。
+  基于 wechat-article-for-ai 增强，实现6文件输出（原始HTML+Markdown+HTML查看器+OCR+JSON）+ RapidOCR 识别 + Hermes 总结回填 + 飞书 Base 同步。
   【同步执行模式】单次对话内完成：工具提取 → AI总结 → Base同步，确保22个字段完整填充。
 ---
 
@@ -31,9 +31,10 @@ description: >
 │     - 普通图片：直接 OCR                                    │
 │     - 长图(>2000px)：切片 → 分段 OCR                       │
 │  5. 二维码识别（zbar-py）：提取招聘/报名链接                │
-│  6. 生成 5 文件输出：                                       │
+│  6. 生成 6 文件输出：                                       │
 │     - article.md（基础 Markdown）                          │
-│     - article.html（HTML 格式）                            │
+│     - article.html（**原始 HTML，保留原文章样式和结构**）  │
+│     - article_viewer.html（Markdown 转换的 HTML 查看器）   │
 │     - article-ocr.md（OCR 结果 + 二维码 + 占位符）          │
 │     - metadata.json（元数据）                              │
 │     - images/（原始图片）                                  │
@@ -60,7 +61,7 @@ description: >
 │                                                             │
 │  阶段 3：飞书 Base 同步（完整字段）                          │
 │  ─────────────────────────────                              │
-│  1. 提取全部 22 个字段（基础9个 + AI分析13个）               │
+│  1. 提取全部 23 个字段（基础10个 + AI分析13个）              │
 │  2. 字段完整性校验（必填字段检查）                           │
 │  3. 调用 Lark CLI 录入多维表格                              │
 │  4. 返回同步结果（记录ID + 字段填充统计）                     │
@@ -110,10 +111,35 @@ description: >
 |------|------|
 | RapidOCR 返回坐标而非文字 | 修正结果解析：`item[1]` 才是文字内容（格式是 `[[box, text, confidence], ...]`） |
 | RGBA 图片保存失败 | 切片前自动转换为 RGB 模式 |
+| **API返回URL格式不兼容** | **修复 `validate_url()` 支持两种格式**：<br>• `/s/xxx` 标准路径格式<br>• `/s?__biz=xxx` 查询参数格式（极致了API返回） |
+
+### URL格式兼容性修复（v3.0.1）
+
+**问题**：极致了API返回的URL格式为 `https://mp.weixin.qq.com/s?__biz=xxx&mid=xxx`（查询参数格式），而原 `validate_url()` 只支持 `/s/xxx` 路径格式，导致提取失败。
+
+**修复代码**（`/tmp/wechat-article-for-ai-pro/wechat_to_md/cli.py` 第77-80行）：
+
+```python
+def validate_url(url: str) -> bool:
+    """Check that URL is a WeChat article URL."""
+    # 支持带参数的 URL，如 ?scene=1&click_id=12
+    # 支持两种格式: /s/xxx 或 /s?__biz=xxx
+    return url.startswith("https://mp.weixin.qq.com/s/") or url.startswith("https://mp.weixin.qq.com/s?")
+```
+
+**使用场景**：
+- 标准分享链接：`https://mp.weixin.qq.com/s/nJ-MZGEiYGM-epQVGKaLCA`
+- 极致了API返回：`https://mp.weixin.qq.com/s?__biz=MzkwMTI4MzE1OQ==&mid=2247621516&idx=2&sn=...`
+
+**注意事项**：
+- 批量处理极致了API返回的文章列表时，需将 `http://` 转换为 `https://`
+- 转换代码：`url = url.replace('http://', 'https://', 1)`
 
 ## 执行命令（同步执行模式 v3.0）
 
 ### 完整执行流程（单次对话内完成）
+
+**注意**：使用系统 Python (`/usr/bin/python3`) 执行，避免虚拟环境依赖问题
 
 ```python
 # ============================================================
@@ -126,10 +152,10 @@ import os
 url = "用户提供的URL"
 output_base = "/tmp/test_output"
 
-# 执行工具提取
+# 执行工具提取（使用系统 Python）
 result = subprocess.run(
-    f'cd /tmp/wechat-article-for-ai-pro && python3 -c "from wechat_to_md.cli import main; import sys; sys.argv = [\'wechat_to_md\', \'{url}\', \'-o\', \'{output_base}\']; main()"',
-    shell=True, capture_output=True, text=True
+    f'cd /tmp/wechat-article-for-ai-pro && /usr/bin/python3 main.py "{url}" -o {output_base} -v',
+    shell=True, capture_output=True, text=True, timeout=300
 )
 
 if result.returncode != 0:
@@ -149,17 +175,18 @@ if result.returncode != 0:
 # 5. 同步到 ~/.hermes/output/
 
 # ============================================================
-# 阶段 3：飞书 Base 同步（完整22字段）
+# 阶段 3：飞书 Base 同步（完整23字段）
 # ============================================================
 
-# 构建完整记录数据（基础9字段 + AI分析13字段）
+# 构建完整记录数据（基础10字段 + AI分析13字段）
 record_data = {
-    # 基础字段（9个）- 从 metadata.json 提取
+    # 基础字段（10个）- 从 metadata.json 提取
     "文章标题": metadata.get('title', ''),
     "公众号": metadata.get('author', ''),
     "发布时间": format_date(metadata.get('published_at', '')),
     "文章链接": metadata.get('url', ''),
-    "素材状态": "待选题",
+    "文章ID": metadata.get('article_id', ''),  # 新增：文章唯一ID，用于精确查找本地目录
+    "文章状态": "待选题",
     "文章来源": "链接",
     "采集时间": int(datetime.now().timestamp() * 1000),
     # ID、最后更新时间由系统自动生成
@@ -182,11 +209,11 @@ record_data = {
 
 # 字段完整性校验
 required_fields = [
-    '文章标题', '公众号', '发布时间', '文章链接',
+    '文章标题', '公众号', '发布时间', '文章链接', '文章ID',
     '行业', '领域', '岗位类型', '工作地点', 
     '学历要求', '截止日期', '投递方式',
     '原文亮点', '文章概要', '选题方向',
-    '素材状态', '文章来源', '适配账号',
+    '文章状态', '文章来源', '适配账号',
     '优先级', '标签', '采集时间'
 ]
 
@@ -272,13 +299,18 @@ lark-cli base +record-upsert \
 
 ```
 ~/.hermes/output/文章标题/
-├── article.md              # 基础文字
-├── article.html            # 网页格式
-├── article-ocr.md          # OCR + 二维码识别 + 总结 ✅
+├── article.md              # 基础 Markdown
+├── article.html            # **原始 HTML**（Camoufox 抓取的原始 HTML，保留原文章样式和结构）
+├── article_viewer.html     # Markdown 转换的 HTML 查看器（可选，用于预览）
+├── article-ocr.md          # OCR 结果 + 二维码 + 总结 ✅
 ├── metadata.json           # 元数据
 ├── images/                 # 原始图片
 └── slices/                 # 长图切片（如有）
 ```
+
+**文件说明**：
+- `article.html`: **原始抓取的 HTML**，包含完整的 `<html>`, `<head>`, `<body>` 结构，保留原文章的所有样式
+- `article_viewer.html`: Markdown 转换生成的 HTML 查看器（主要用于预览，非原始结构）
 
 ### article-ocr.md 结构（v1.7+）
 
@@ -435,7 +467,8 @@ git commit -m "Initial commit: fork from bzd6661/wechat-article-for-ai"
 
 创建 `wechat_to_md/formatter.py`：
 - 生成 `article.md`（YAML frontmatter）
-- 生成 `article.html`（原图优先展示）
+- 生成 `article.html`（**原始 HTML，保留原文章样式**）
+- 生成 `article_viewer.html`（Markdown 转换的 HTML 查看器）
 - 生成 `metadata.json`（结构化元数据）
 - 整理 `images/` 文件夹
 
@@ -560,7 +593,8 @@ for img in images:
 output/
 └── 文章标题/
     ├── article.md          # Markdown 原文
-    ├── article.html        # HTML 查看器
+    ├── article.html        # **原始 HTML**（保留原文章样式）
+    ├── article_viewer.html # Markdown 转换的 HTML 查看器
     ├── metadata.json       # 结构化元数据
     ├── article-ocr.md      # OCR 识别结果 ⭐
     └── images/             # 下载的图片
@@ -688,6 +722,102 @@ with open(f"{output_dir}/.hermes_summary_pending", "w") as f:
 ---
 
 ## 故障排除与维护
+
+### Python 环境兼容性问题（macOS 常见）
+
+**问题现象**：
+```
+ModuleNotFoundError: No module named 'markdownify'
+```
+
+**根本原因**：
+- 工具依赖 `markdownify` 等 Python 包
+- Hermes 虚拟环境 (`venv/bin/python3`) 可能缺少这些依赖
+- 系统 Python (`/usr/bin/python3`) 通常已安装所需包
+
+**解决方案**：
+使用系统 Python 执行工具：
+
+```python
+import subprocess
+
+url = "https://mp.weixin.qq.com/s/xxx"
+output_base = "/tmp/test_output"
+
+# 使用系统 Python3 而非虚拟环境
+result = subprocess.run(
+    f'cd /tmp/wechat-article-for-ai-pro && /usr/bin/python3 main.py "{url}" -o {output_base} -v',
+    shell=True, capture_output=True, text=True, timeout=300
+)
+
+if result.returncode != 0:
+    raise Exception(f"工具提取失败: {result.stderr}")
+```
+
+**检查系统 Python 可用性**：
+```bash
+# 检查系统 Python 是否存在
+ls -la /usr/bin/python3
+
+# 检查依赖是否已安装
+/usr/bin/python3 -c "import markdownify; print('OK')"
+```
+
+**备选方案**（如果系统 Python 也缺少依赖）：
+```bash
+# 在系统 Python 中安装依赖
+/usr/bin/python3 -m pip install markdownify rapidocr zbar-py
+```
+
+**终极备选：使用浏览器工具提取**（当 Python 工具完全无法运行时）：
+
+如果 Python 工具因依赖问题（如 orjson、camoufox 等）完全无法运行，可以使用 Hermes 内置浏览器工具作为 fallback：
+
+```python
+# 使用 browser_navigate 和 browser_snapshot 提取文章内容
+# 然后手动保存为标准格式（article.md, article.html, metadata.json）
+
+import json
+from datetime import datetime
+from pathlib import Path
+
+# 1. 使用浏览器获取内容
+# browser_navigate(url="https://mp.weixin.qq.com/s/xxx")
+# snapshot = browser_snapshot(full=True)
+
+# 2. 解析内容并创建标准输出
+def create_standard_output(title, content, url, author, output_dir):
+    article_dir = Path(output_dir) / title.replace("/", "_")
+    article_dir.mkdir(parents=True, exist_ok=True)
+    
+    # article.md
+    md_content = f"# {title}\n\n{content}"
+    (article_dir / "article.md").write_text(md_content, encoding="utf-8")
+    
+    # article.html
+    html_content = f"<!DOCTYPE html><html><body>{content}</body></html>"
+    (article_dir / "article.html").write_text(html_content, encoding="utf-8")
+    
+    # metadata.json
+    metadata = {
+        "url": url,
+        "title": title,
+        "author": author,
+        "published_at": "",
+        "extraction_method": "browser-tool",
+        "extraction_time": datetime.now().isoformat(),
+        "image_count": 0,
+        "images": []
+    }
+    (article_dir / "metadata.json").write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2), 
+        encoding="utf-8"
+    )
+    
+    return article_dir
+```
+
+**注意**：浏览器提取方式缺少 OCR 和二维码识别功能，适合纯文字文章或作为应急方案。
 
 ### Skill 丢失/损坏恢复
 
@@ -903,7 +1033,7 @@ def sync_article_to_feishu(article_dir: str) -> dict:
         "选题方向": determine_topic_direction(ocr_content),
         
         # 固定值字段
-        "素材状态": "待选题",
+        "文章状态": "待选题",
         "文章来源": "链接",
         "适配账号": match_accounts(ocr_content),
         "优先级": "中",
@@ -1007,16 +1137,22 @@ def sync_to_feishu(record_data: dict) -> dict:
     base_token = "E9y1bxjHGa9LeGs9q3Tc3J41nmf"
     table_id = "tblYIqHtHrWUlVnP"
     
-    # 写入临时文件（必须使用相对路径）
-    with open('sync_data.json', 'w', encoding='utf-8') as f:
-        json.dump(record_data, f, ensure_ascii=False)
-    
-    try:
-        # 执行同步命令
-        result = subprocess.run(
-            f'lark-cli base +record-upsert --base-token {base_token} --table-id {table_id} --json @sync_data.json --as bot',
-            shell=True, capture_output=True, text=True
-        )
+    # ⚠️ 关键：Lark CLI 要求使用相对路径，不能使用绝对路径
+    # 先切换到临时目录，写入文件后再执行命令
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmpdir:
+        os.chdir(tmpdir)
+        
+        # 写入临时文件（相对路径）
+        with open('sync_data.json', 'w', encoding='utf-8') as f:
+            json.dump(record_data, f, ensure_ascii=False)
+        
+        try:
+            # 执行同步命令（在临时目录中执行，使用相对路径）
+            result = subprocess.run(
+                f'lark-cli base +record-upsert --base-token {base_token} --table-id {table_id} --json @sync_data.json --as bot',
+                shell=True, capture_output=True, text=True
+            )
         
         # 解析结果
         if result.returncode == 0:
@@ -1028,10 +1164,9 @@ def sync_to_feishu(record_data: dict) -> dict:
                 return {'success': False, 'error': response.get('error')}
         else:
             return {'success': False, 'error': result.stderr}
-    finally:
-        # 清理临时文件
-        if os.path.exists('sync_data.json'):
-            os.remove('sync_data.json')
+        finally:
+            # 清理临时文件（可选，TemporaryDirectory 会自动清理）
+            pass
 
 # 使用示例
 record = {
@@ -1046,6 +1181,13 @@ if result['success']:
     print(f"同步成功！记录ID: {result['record_id']}")
 else:
     print(f"同步失败: {result['error']}")
+```
+
+**⚠️ 重要提示**：Lark CLI 的 `--json` 参数必须使用相对路径，不能使用绝对路径（如 `/tmp/sync_data.json`）。解决方案：
+1. 使用 `tempfile.TemporaryDirectory()` 创建临时目录
+2. `os.chdir()` 切换到该目录
+3. 写入文件并使用相对路径 `@sync_data.json`
+4. 命令执行完成后自动清理
 ```
 
 ### 更新已有记录
@@ -1182,22 +1324,22 @@ cat > data.json << 'EOF'
   "原文亮点": "亮点内容",
   "文章概要": "概要内容",
   "选题方向": "消费品行业实习机会",
-  "素材状态": "待选题",
-  "文章来源": "链接",
-  "适配账号": ["Joblinker"],
-  "优先级": "中",
-  "标签": ["大厂"],
-  "采集时间": 1752571200000
-}
-EOF
-
-# 执行同步
-lark-cli base +record-upsert \
-  --base-token "E9y1bxjHGa9LeGs9q3Tc3J41nmf" \
-  --table-id "tblYIqHtHrWUlVnP" \
-  --json @data.json \
+    "文章状态": "待选题",
+    "文章来源": "链接",
+    "适配账号": ["Joblinker"],
+    "优先级": "中",
+    "标签": "大厂",
+    "采集时间": 1776756180000
+  }' \\
   --as bot
+```
 
+### 更新已有记录
+### 二创工作流
+    "采集时间": 1776756180000
+  }' \\
+  --as bot
+```
 # 清理临时文件
 rm data.json
 ```
@@ -1318,17 +1460,17 @@ lark-cli base +record-upsert \
     "领域": "消费品",
     "岗位类型": "校招",
     "工作地点": "杭州",
-    "学历要求": "本科",
-    "截止日期": "/",
+    "文章状态": "待选题",
+    "文章来源": "链接",
+    "适配账号": ["Joblinker"],
     "优先级": "中",
-    "状态": "待处理",
     "标签": "大厂",
-    "亮点": "九大品牌矩阵，实习生有留用机会"
-  }' \
+    "采集时间": 1776756180000
+  }' \\
   --as bot
 ```
-| **最后更新时间** | **系统字段** | **自动记录最后修改时间** |
 
+### 更新已有记录
 ### 二创工作流
 
 ```
@@ -1381,7 +1523,84 @@ lark-cli base +record-upsert \
 
 ## 关键经验教训（必读）
 
-### 1. 飞书 Base 字段格式陷阱
+### 1. OCR内容读取优先级（v3.0.2 新增）
+
+**核心原则**：AI分析时优先读取 `article-ocr.md` 中的OCR结果，而非重新识别图片。
+
+**原因**：
+- 工具提取阶段已完成RapidOCR识别，结果保存在 `article-ocr.md` 中
+- 重新调用 `vision_analyze` 识别图片效率低且重复
+- OCR结果已包含在 `[段1]`, `[段2]`, `[段3]` 等标记中
+
+**正确做法**：
+```python
+# 1. 直接读取 article-ocr.md
+with open(os.path.join(article_dir, 'article-ocr.md'), 'r', encoding='utf-8') as f:
+    ocr_content = f.read()
+
+# 2. 从OCR内容提取关键信息
+# OCR结果格式示例：
+# [段1]
+# 招聘对象
+# 2027届毕业生
+# ...
+
+# 3. 基于OCR内容进行AI分析
+analysis = {
+    "行业": analyze_industry(ocr_content),
+    "岗位类型": analyze_job_types(ocr_content),
+    # ... 其他字段
+}
+```
+
+**错误做法**：
+```python
+# ❌ 不要重新识别图片
+vision_analyze(image_url="...", question="提取文字")
+# 效率低，重复工作
+```
+
+### 2. 文章目录查找逻辑（v3.0.2 新增）
+
+**问题**：文章标题包含特殊字符（如 `|`）时，提取的目录名可能被截断。
+
+**示例**：
+- 原标题：`实习 | 字节跳动2027届实习生招聘`
+- 工具提取目录：`/tmp/test_output/实习`（被截断）
+- 实际完整目录：`/tmp/test_output/实习 _ 字节跳动2027届实习生招聘`
+
+**解决方案**：
+```python
+# 方法1：使用metadata.json中的标题查找
+def find_article_dir_by_title(output_dir, target_title):
+    """通过标题查找文章目录"""
+    for dirname in os.listdir(output_dir):
+        full_path = os.path.join(output_dir, dirname)
+        if os.path.isdir(full_path):
+            metadata_path = os.path.join(full_path, 'metadata.json')
+            if os.path.exists(metadata_path):
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
+                if metadata.get('title') == target_title:
+                    return full_path
+    return None
+
+# 方法2：使用URL查找（推荐）
+def find_article_dir_by_url(output_dir, target_url):
+    """通过URL查找文章目录"""
+    for dirname in os.listdir(output_dir):
+        full_path = os.path.join(output_dir, dirname)
+        if os.path.isdir(full_path):
+            metadata_path = os.path.join(full_path, 'metadata.json')
+            if os.path.exists(metadata_path):
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
+                if metadata.get('url') == target_url:
+                    return full_path
+    return None
+```
+
+### 3. 飞书 Base 字段格式陷阱
 
 **发现过程**：多次尝试后发现 API 报错 "Match one of the supported request payload shapes exactly"
 
@@ -1429,6 +1648,246 @@ lark-cli base +record-upsert \
 **用户指令**：
 - "保存当前进度" → 立即更新标记文件
 - "查看状态" → 读取标记文件汇报
+
+### 微信公众号草稿验证（v3.0.6 新增）
+
+**使用场景**：
+- 上传后内容显示异常，需要诊断问题
+- 验证图片是否正确上传
+- 确认 HTML 结构是否完整
+
+**API 验证方法**：
+
+```python
+import requests
+
+def verify_wechat_draft(appid: str, media_id: str, api_key: str) -> dict:
+    """
+    验证微信公众号草稿内容
+    
+    Args:
+        appid: 公众号 AppID
+        media_id: 草稿 MediaID
+        api_key: 简立制作 API Key
+        
+    Returns:
+        dict: 包含 content_length, image_count, content_preview
+    """
+    url = f"https://mp.jianlizhizuo.cn/v1/accounts/{appid}/drafts/{media_id}"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    
+    response = requests.get(url, headers=headers, timeout=30)
+    data = response.json()
+    
+    if data.get("code") != 0:
+        return {"success": False, "error": data.get("message")}
+    
+    draft = data["data"]["draft"]
+    content = draft.get("content", "")
+    
+    return {
+        "success": True,
+        "title": draft.get("title"),
+        "content_length": len(content),
+        "image_count": content.count("<img"),
+        "thumb_media_id": draft.get("thumb_media_id"),
+        "content_preview": content[:500] + "..." if len(content) > 500 else content
+    }
+
+# 使用示例
+result = verify_wechat_draft(
+    appid="wxa0e3ae2f81exxxxx",
+    media_id="svD8zPLBr026J0ip2Vt08Mk7wXHqMje5dGGQ_i3741PYE4_EVI5YJVbLSp_aY3rW",
+    api_key="sk-fe371224c96fd8ab819c8d9159099158ead65b5039ba5c4d"
+)
+
+if result["success"]:
+    print(f"✅ 草稿验证成功")
+    print(f"   标题: {result['title']}")
+    print(f"   内容长度: {result['content_length']} 字符")
+    print(f"   图片数量: {result['image_count']} 张")
+    
+    # 判断是否正常
+    if result['content_length'] < 10000:
+        print("⚠️ 警告: 内容长度异常，可能未正确上传")
+    if result['image_count'] == 0:
+        print("⚠️ 警告: 未检测到图片")
+else:
+    print(f"❌ 验证失败: {result['error']}")
+```
+
+**正常 vs 异常指标**：
+
+| 指标 | 正常范围 | 异常信号 | 处理建议 |
+|------|---------|---------|----------|
+| 内容长度 | 50,000+ 字符（完整文章） | < 10,000 字符 | 重新提取原始 HTML |
+| 图片数量 | 与原文一致（10-30张） | 0 张或少于原文 | 检查 images/ 目录和路径 |
+| HTML 结构 | 包含 `<section>` 标签 | 只有 `<p>`, `<strong>` | 使用修复流程重新提取 |
+| 标签闭合 | 正确闭合 `</strong>` | `<strong>text<strong>` | 重新抓取原始 HTML |
+
+**诊断流程**：
+
+```
+上传草稿后
+    ↓
+调用 API 验证
+    ↓
+内容长度 < 10K?
+    ├── 是 → 检查 article.html 是否为 Markdown 转换版
+    │         └── 是 → 执行 fix_article_html() 修复
+    │
+    └── 否 → 图片数量 = 0?
+              ├── 是 → 检查 images/ 目录是否存在
+              │         └── 不存在 → 重新下载图片
+              │
+              └── 否 → 检查 HTML 标签是否正确闭合
+                        └── 未闭合 → 修复 HTML 格式
+```
+
+### HTML 格式修复方案（v3.0.5 新增）
+
+**问题现象**：
+- `article.html` 标签未闭合：`<strong>text<strong>`（应为 `</strong>`）
+- 图片未下载或路径错误
+- HTML 结构混乱，MD 标记残留（如 `---`）
+- 上传微信公众号后内容显示异常
+
+**根本原因**：
+- Python 提取工具未正确执行（依赖缺失、Camoufox 失败等）
+- 手动创建的 HTML 是 Markdown 转换版，非微信原始 HTML
+- `save_original_html()` 函数未被调用或执行失败
+
+**修复流程**：
+
+```python
+import requests
+import re
+import os
+from pathlib import Path
+from datetime import datetime
+
+def fix_article_html(article_url: str, output_dir: str) -> dict:
+    """
+    修复损坏的 article.html，重新抓取微信原始 HTML
+    
+    Args:
+        article_url: 微信文章 URL
+        output_dir: 文章输出目录（如 ~/.hermes/output/文章标题/）
+        
+    Returns:
+        dict: 包含 success, html_path, images_count, images_dir
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    }
+    
+    # 1. 抓取原始页面
+    response = requests.get(article_url, headers=headers, timeout=30)
+    html = response.text
+    
+    # 2. 提取 #js_content 区域（微信文章正文）
+    match = re.search(
+        r'<div[^>]*id=["\']js_content["\'][^>]*>(.*?)</div>\s*</div>\s*<script', 
+        html, re.DOTALL
+    )
+    
+    if not match:
+        return {"success": False, "error": "无法提取正文内容"}
+    
+    content_html = match.group(1)
+    
+    # 3. 提取图片 URL
+    img_urls = re.findall(r'data-src=["\'](https?://[^"\']+)["\']', content_html)
+    
+    # 4. 构建完整 HTML
+    article_dir = Path(output_dir)
+    title = article_dir.name
+    
+    original_html = f'''<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{title}</title>
+<style>
+body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; line-height: 1.8; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; }}
+img {{ max-width: 100%; height: auto; display: block; margin: 10px 0; }}
+strong {{ font-weight: bold; }}
+</style>
+</head>
+<body>
+{content_html}
+</body>
+</html>'''
+    
+    # 5. 备份旧 HTML
+    html_path = article_dir / "article.html"
+    if html_path.exists():
+        backup_path = article_dir / "article_broken_backup.html"
+        html_path.rename(backup_path)
+        print(f"✅ 已备份损坏文件: {backup_path}")
+    
+    # 6. 保存新 HTML
+    html_path.write_text(original_html, encoding="utf-8")
+    print(f"✅ 原始 HTML 已保存: {html_path} ({len(original_html)} 字符)")
+    
+    # 7. 下载图片
+    images_dir = article_dir / "images"
+    images_dir.mkdir(exist_ok=True)
+    
+    downloaded = []
+    for i, img_url in enumerate(img_urls):
+        try:
+            img_response = requests.get(img_url, headers=headers, timeout=30)
+            if img_response.status_code == 200:
+                ext = img_url.split('?')[0].split('.')[-1]
+                if ext not in ['jpg', 'jpeg', 'png', 'gif', 'webp']:
+                    ext = 'jpg'
+                img_path = images_dir / f"img_{i+1:03d}.{ext}"
+                img_path.write_bytes(img_response.content)
+                downloaded.append(img_path.name)
+        except Exception as e:
+            print(f"⚠️ 图片下载失败: {img_url[:50]}... - {e}")
+    
+    print(f"✅ 已下载 {len(downloaded)}/{len(img_urls)} 张图片")
+    
+    return {
+        "success": True,
+        "html_path": str(html_path),
+        "html_size": len(original_html),
+        "images_count": len(downloaded),
+        "images_dir": str(images_dir)
+    }
+
+# 使用示例
+result = fix_article_html(
+    article_url="https://mp.weixin.qq.com/s/xxx",
+    output_dir="~/.hermes/output/文章标题/"
+)
+
+if result["success"]:
+    print(f"✅ 修复完成！")
+    print(f"   HTML: {result['html_size']} 字符")
+    print(f"   图片: {result['images_count']} 张")
+else:
+    print(f"❌ 修复失败: {result.get('error')}")
+```
+
+**对比验证**：
+
+| 指标 | 修复前（损坏） | 修复后（正确） |
+|------|-------------|--------------|
+| HTML 长度 | ~5,000 字符 | ~60,000+ 字符 |
+| 图片数量 | 0 张 | 15+ 张 |
+| 标签格式 | `<strong>text<strong>` | `<strong>text</strong>` |
+| 内容来源 | Markdown 转换 | 微信原始 `#js_content` |
+| 上传结果 | 格式错乱 | 正常显示 |
+
+**何时使用**：
+- Python 提取工具执行失败或输出异常
+- `article.html` 文件大小异常（< 10KB 且文章有图片）
+- 上传微信公众号后内容显示异常
+- 图片缺失或路径错误
 
 ### 4. 双仓库管理策略
 
@@ -1531,6 +1990,7 @@ lark-cli base +record-upsert \
 | 公众号 | 文本 | 从metadata提取 | `"欧普照明微招聘"` |
 | 发布时间 | 日期 | 从metadata提取 | `"2026-04-21 15:01:39"` |
 | 文章链接 | 文本 | 从metadata提取 | `"https://mp.weixin.qq.com/s/xxx"` |
+| **文章ID** | **文本** | **从metadata提取，UUID格式** | **`"fa70b413"`** |
 | 行业 | 单选 | AI分析文章内容判断 | `"消费品"` / `"金融"` / `"能源"` |
 | 领域 | 单选 | AI分析文章内容判断 | `"消费品"` / `"投资"` / `"电力"` |
 | 岗位类型 | 多选 | AI分析招聘类型，**最多2个** | `["实习"]` / `["校招"]` / `["实习", "校招"]` |
@@ -1541,7 +2001,7 @@ lark-cli base +record-upsert \
 | 原文亮点 | 文本 | AI总结核心亮点 | `"提前锁定Offer；六大招聘方向；近4000件专利"` |
 | 文章概要 | 文本 | AI生成结构化总结（500字内） | 公司概况+招聘亮点+关键信息 |
 | 选题方向 | 文本 | AI根据行业和账号匹配生成 | `"消费品行业实习机会"` |
-| 素材状态 | 单选 | 固定值 `"待选题"` | `"待选题"` |
+| 文章状态 | 单选 | 固定值 `"待选题"` | `"待选题"` |
 | 文章来源 | 单选 | 固定值 `"链接"` | `"链接"` |
 | 适配账号 | 多选 | 根据行业/领域/岗位类型匹配，**规则见下方** | `["Joblinker"]` / `["研究生求职圈", "行研实习"]` |
 | 优先级 | 单选 | 默认 `"中"`，重要可标 `"高"` | `"中"` |
@@ -1633,18 +2093,18 @@ lark-cli base +record-upsert \
     "原文亮点": "提前锁定27届校招Offer；六大招聘方向(研发/产品/算法/营销/品牌/职能)；近4000件授权专利；终端网点14万家；2016年上市",
     "文章概要": "欧普照明27届实习生招聘，面向2026年11月-2027年10月毕业生。招聘研发类、产品类、算法类、营销类、品牌类、职能类六大方向。4月21日启动网申，5月7日起AI面试，实习表现优异者可提前获得校招Offer。",
     "选题方向": "消费品行业实习机会",
-    "素材状态": "待选题",
+    "文章状态": "待选题",
     "文章来源": "链接",
     "适配账号": ["Joblinker"],
     "优先级": "中",
     "标签": "大厂",
     "采集时间": 1776756180000
-  }' \
+  }' \\
   --as bot
 ```
 
 ### 更新已有记录
-
+### 二创工作流
 使用 `api PUT` 更新特定字段：
 
 ```bash
@@ -1690,12 +2150,44 @@ lark-cli api PUT /open-apis/bitable/v1/apps/E9y1bxjHGa9LeGs9q3Tc3J41nmf/tables/t
 | v2.17 | **集成 zbar-py 说明**：v1.7.2 新增 zbar-py 支持，解决复杂背景二维码识别问题 |
 | v2.18 | **添加执行反馈规范**：明确二维码识别状态和飞书 Base 写入成功的反馈格式 |
 | **v3.0** | **【重大更新】同步执行模式**：<br>• 将 Hybrid 模式改为同步执行，单次对话内完成全部阶段<br>• 阶段2（AI总结）和阶段3（Base同步）自动触发，无需用户二次指令<br>• 添加22字段完整性校验机制<br>• 更新执行反馈规范，显示字段填充统计<br>• 解决字段缺失问题，确保100%字段填充率 |
+| **v3.0.1** | **【修复】URL格式兼容性**：<br>• 修复 `validate_url()` 支持极致了API返回的查询参数格式（`/s?__biz=xxx`）<br>• 解决批量处理时"No valid WeChat URLs found"错误 |
+| **v3.0.2** | **【新增】标准反馈格式**：<br>• 强制要求每次同步后按 `字段填充: X/22 (Y%)` 格式反馈<br>• 新增OCR内容读取优先级规范（优先读取article-ocr.md）<br>• 新增文章目录查找逻辑（处理特殊字符截断问题） |
+| **v3.0.3** | **【优化】HTML 输出格式**：<br>• 新增 `save_original_html()` 函数保存原始 HTML<br>• `article.html` 现在保存 Camoufox 抓取的原始 HTML<br>• 新增 `article_viewer.html` 保存 Markdown 转换的 HTML 查看器<br>• 同时保留原始样式和便于查看的格式 |
+| **v3.0.5** | **【新增】HTML 格式修复方案**：<br>• 添加 `fix_article_html()` 函数，用于修复损坏的 HTML<br>• 使用 requests + regex 重新抓取微信原始 HTML<br>• 自动下载图片并替换本地路径<br>• 提供完整的修复流程和对比验证指标 |
+| **v3.0.7** | **【修复】Lark CLI 路径限制**：<br>• 修复 `--json` 参数必须使用相对路径的问题<br>• 使用 `tempfile.TemporaryDirectory()` + `os.chdir()` 方案<br>• 解决 `"--file must be a relative path"` 错误 |
+| **v3.0.8** | **【新增】文章ID 字段**：<br>• 飞书 Base 新增「文章ID」字段（fldthrINWp）<br>• 用于存储 UUID 格式的文章目录名<br>• 上传脚本优先通过 article_id 查找本地目录<br>• 解决标题特殊字符导致的匹配问题 |
 
 ---
 
 ## 执行反馈规范（v3.0 更新）
 
-每次执行完成后，必须向用户反馈以下关键信息：
+**⚠️ 强制要求**：每次同步完成后，必须按照以下标准格式反馈字段填充率。
+
+### 标准反馈格式（用户明确要求）
+
+```
+✅ 同步成功！
+   记录ID: {record_id}
+   字段填充: 22/22 (100%)
+```
+
+**格式规范**：
+- 必须包含"同步成功！"或"同步失败！"
+- 必须显示记录ID
+- **必须显示字段填充率，格式为：`字段填充: X/22 (Y%)`**
+- 如果字段缺失，显示实际填充数量和百分比
+
+**示例**：
+```
+✅ 同步成功！
+   记录ID: recvhvG9EUnpVg
+   字段填充: 22/22 (100%)
+
+✅ 同步成功！
+   记录ID: recvhvG9EUnpVg
+   字段填充: 19/22 (86%)
+   缺失字段: 截止日期、学历要求、投递方式
+```
 
 ### 必须反馈的信息
 
@@ -1704,7 +2196,8 @@ lark-cli api PUT /open-apis/bitable/v1/apps/E9y1bxjHGa9LeGs9q3Tc3J41nmf/tables/t
 | **阶段执行状态** | 4个阶段全部完成 | `✅ 工具提取 → AI总结 → Base同步` |
 | **二维码识别状态** | 检测到 N 张包含二维码的图片 | `✅ 二维码识别：检测到 3 张二维码` |
 | **二维码详情** | 招聘链接/报名链接/普通链接分类 | 列出每个二维码的类型和内容 |
-| **飞书 Base 写入状态** | 成功/失败 + 记录 ID + 字段统计 | `✅ 飞书 Base 同步成功：记录ID recvhtBMKreN0I (22/22字段)` |
+| **飞书 Base 写入状态** | 成功/失败 + 记录 ID + 字段统计 | `✅ 飞书 Base 同步成功：记录ID recvhtBMKreN0I` |
+| **字段填充率** | **必须按标准格式显示** | `字段填充: 22/22 (100%)` |
 | **字段填充详情** | 已填充 vs 缺失字段列表 | 显示22个字段的填充情况 |
 | **本地输出路径** | 文件保存位置 | `~/.hermes/output/文章标题/` |
 
@@ -1726,15 +2219,15 @@ lark-cli api PUT /open-apis/bitable/v1/apps/E9y1bxjHGa9LeGs9q3Tc3J41nmf/tables/t
 
 | 类型 | 数量 | 状态 |
 |------|------|------|
-| **基础字段** | 9/9 | ✅ 全部填充 |
+| **基础字段** | 10/10 | ✅ 全部填充 |
 | **AI分析字段** | 13/13 | ✅ 全部填充 |
-| **总计** | 22/22 | ✅ 完整 |
+| **总计** | 23/23 | ✅ 完整 |
 
 ### 已填充字段详情
 
-**基础字段（9个）**：
-- ✅ 文章标题、公众号、发布时间、文章链接
-- ✅ 素材状态、文章来源、采集时间
+**基础字段（10个）**：
+- ✅ 文章标题、公众号、发布时间、文章链接、**文章ID**
+- ✅ 文章状态、文章来源、采集时间
 - ✅ ID、最后更新时间（系统自动）
 
 **AI分析字段（13个）**：
@@ -1764,7 +2257,8 @@ lark-cli api PUT /open-apis/bitable/v1/apps/E9y1bxjHGa9LeGs9q3Tc3J41nmf/tables/t
 ```
 ~/.hermes/output/文章标题/
 ├── article.md
-├── article.html
+├── article.html            # **原始 HTML**（保留原文章样式）
+├── article_viewer.html     # Markdown 转换的 HTML 查看器
 ├── article-ocr.md ✅（已回填结构化总结）
 ├── metadata.json
 └── images/（N 张图片）
